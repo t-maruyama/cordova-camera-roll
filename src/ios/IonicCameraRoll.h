@@ -7,5 +7,9 @@
 {}
 
 - (void)getPhotos:(CDVInvokedUrlCommand*)command;
+- (void)getFullScreenImage:(CDVInvokedUrlCommand*)command;
+- (void)getOriginalImage:(CDVInvokedUrlCommand*)command;
+- (void)cleanup:(CDVInvokedUrlCommand*)command;
+
 
 @end

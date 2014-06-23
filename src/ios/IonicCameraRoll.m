@@ -13,6 +13,8 @@
 #import <AssetsLibrary/ALAssetRepresentation.h>
 #import <CoreLocation/CoreLocation.h>
 
+#define CDV_PHOTO_PREFIX @"cdv_photo_"
+
 @implementation IonicCameraRoll
 
   + (ALAssetsLibrary *)defaultAssetsLibrary {
@@ -40,12 +42,15 @@
   // Run a background job
   [self.commandDelegate runInBackground:^{
     
+    //キュー
+      NSOperationQueue *opQueue = [[NSOperationQueue alloc] init];
+      [opQueue setMaxConcurrentOperationCount:4];
+      
     // Enumerate all of the group saved photos, which is our Camera Roll on iOS
     [library enumerateGroupsWithTypes:ALAssetsGroupSavedPhotos usingBlock:^(ALAssetsGroup *group, BOOL *stop) {
       
       // When there are no more images, the group will be nil
       if(group == nil) {
-        
         // Send a null response to indicate the end of photostreaming
         CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:nil];
         [pluginResult setKeepCallbackAsBool:YES];
@@ -56,17 +61,56 @@
         // Enumarate this group of images
         
         [group enumerateAssetsUsingBlock:^(ALAsset *result, NSUInteger index, BOOL *stop) {
-          
-          NSDictionary *urls = [result valueForProperty:ALAssetPropertyURLs];
-          
-          [urls enumerateKeysAndObjectsUsingBlock:^(id key, NSURL *obj, BOOL *stop) {
 
-            // Send the URL for this asset back to the JS callback
-            CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:obj.absoluteString];
-            [pluginResult setKeepCallbackAsBool:YES];
-            [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
-          
-          }];
+            
+            CDVPluginResult *pluginResult = nil;
+            
+            if(result == nil){
+                pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:nil];
+                [pluginResult setKeepCallbackAsBool:YES];
+                [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+                return;
+            }
+            
+            NSOperation *op = [NSBlockOperation blockOperationWithBlock:^{
+
+                CDVPluginResult *pluginResult = nil;
+                
+                ALAssetRepresentation *rep = [result defaultRepresentation];
+                
+                NSURL *assetUrl = [result valueForProperty:ALAssetPropertyAssetURL];
+                
+                //UIImage *dispImg = [UIImage imageWithCGImage:[rep fullScreenImage]]; //heavy
+                UIImage *thumbImg = [UIImage imageWithCGImage:[result thumbnail]];
+                NSString *thumbDataUrl = [UIImageJPEGRepresentation(thumbImg, 0.8) base64EncodedStringWithOptions:NSDataBase64Encoding64CharacterLineLength];
+                
+                CGSize size = [rep dimensions];
+                NSDate *date = [result valueForProperty:ALAssetPropertyDate];
+                NSString *srcFilename = [rep filename];
+                
+                
+                NSDateFormatter *df = [[NSDateFormatter alloc] init];
+                [df setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
+                NSString *dateStr = [df stringFromDate:date];
+                NSString *widthStr = [NSString stringWithFormat:@"%g", size.width];
+                NSString *heightStr = [NSString stringWithFormat:@"%g", size.height];
+         
+                NSDictionary * res = [NSDictionary dictionaryWithObjectsAndKeys:
+                                      assetUrl.absoluteString, @"assetUrl",
+                                      thumbDataUrl, @"thumbDataUrl",
+                                      dateStr, @"date",
+                                      srcFilename, @"filename",
+                                      widthStr, @"width",
+                                      heightStr, @"height",
+                                      nil];
+                
+                pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:res];
+                
+                [pluginResult setKeepCallbackAsBool:YES];
+                [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+            }];
+            [opQueue addOperation:op];
+            
         }];
       }
     } failureBlock:^(NSError *error) {
@@ -74,8 +118,94 @@
       CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:error.localizedDescription];
       [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
     }];
+      
+      [opQueue waitUntilAllOperationsAreFinished];
   }];
 
+}
+
+- (void)getFullScreenImage:(CDVInvokedUrlCommand*)command
+{
+    NSLog(@"getFullScreenImage");
+    NSURL* assetUrl = [NSURL URLWithString:[command.arguments objectAtIndex:0]];
+    
+    //NSLog(assetUrl.absoluteString);
+    
+    // Grab the asset library
+    ALAssetsLibrary *library = [IonicCameraRoll defaultAssetsLibrary];
+    
+    
+    [library assetForURL:assetUrl resultBlock:^(ALAsset *asset) {
+        CDVPluginResult *pluginResult = nil;
+        
+        UIImage *dispImg = [UIImage imageWithCGImage:[[asset defaultRepresentation ] fullScreenImage]];
+        
+        //copy
+        NSString* docsPath = [NSTemporaryDirectory()stringByStandardizingPath];
+        NSFileManager* fileMgr = [[NSFileManager alloc] init];
+        NSString *dispPath = nil;
+        do {
+            NSString *uuid = [[NSUUID UUID] UUIDString];
+            
+            dispPath = [NSString stringWithFormat:@"%@/%@disp_%@.%@", docsPath, CDV_PHOTO_PREFIX, uuid, @"jpg"];
+        } while ([fileMgr fileExistsAtPath:dispPath]);
+        
+        //save disp
+        NSError* err = nil;
+        if(![UIImageJPEGRepresentation(dispImg, 0.8) writeToFile:dispPath options:NSAtomicWrite error:&err]){
+                pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_IO_EXCEPTION messageAsString:[err localizedDescription]];
+        }
+        
+        NSURL *dispUrl = [NSURL fileURLWithPath:dispPath];
+        
+        pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:dispUrl.absoluteString];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+        
+        
+    } failureBlock:^(NSError *error) {
+        CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:error.localizedDescription];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+    }];
+}
+
+- (void)getOriginalImage:(CDVInvokedUrlCommand*)command
+{
+    
+}
+
+- (void)cleanup:(CDVInvokedUrlCommand*)command
+{
+    // empty the tmp directory
+    NSFileManager* fileMgr = [[NSFileManager alloc] init];
+    NSError* err = nil;
+    BOOL hasErrors = NO;
+    
+    // clear contents of NSTemporaryDirectory
+    NSString* tempDirectoryPath = NSTemporaryDirectory();
+    NSDirectoryEnumerator* directoryEnumerator = [fileMgr enumeratorAtPath:tempDirectoryPath];
+    NSString* fileName = nil;
+    BOOL result;
+    
+    while ((fileName = [directoryEnumerator nextObject])) {
+        // only delete the files we created
+        if (![fileName hasPrefix:CDV_PHOTO_PREFIX]) {
+            continue;
+        }
+        NSString* filePath = [tempDirectoryPath stringByAppendingPathComponent:fileName];
+        result = [fileMgr removeItemAtPath:filePath error:&err];
+        if (!result && err) {
+            NSLog(@"Failed to delete: %@ (error: %@)", filePath, err);
+            hasErrors = YES;
+        }
+    }
+    
+    CDVPluginResult* pluginResult;
+    if (hasErrors) {
+        pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_IO_EXCEPTION messageAsString:@"One or more files failed to be deleted."];
+    } else {
+        pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
+    }
+    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
 }
 
 @end

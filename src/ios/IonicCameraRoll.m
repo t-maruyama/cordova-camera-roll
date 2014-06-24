@@ -170,7 +170,30 @@
 
 - (void)getOriginalImage:(CDVInvokedUrlCommand*)command
 {
+    NSLog(@"getOriginalImage");
+    NSURL* assetUrl = [NSURL URLWithString:[command.arguments objectAtIndex:0]];
     
+    //NSLog(assetUrl.absoluteString);
+    
+    // Grab the asset library
+    ALAssetsLibrary *library = [IonicCameraRoll defaultAssetsLibrary];
+    
+    
+    [library assetForURL:assetUrl resultBlock:^(ALAsset *asset) {
+        CDVPluginResult *pluginResult = nil;
+        
+        UIImage *orgImg = [UIImage imageWithCGImage:[[asset defaultRepresentation ] fullResolutionImage]];
+        
+        NSString *orgDataUrl = [UIImageJPEGRepresentation(orgImg, 0.9) base64EncodedStringWithOptions:NSDataBase64Encoding64CharacterLineLength];
+        
+        pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:orgDataUrl];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+        
+        
+    } failureBlock:^(NSError *error) {
+        CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:error.localizedDescription];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+    }];
 }
 
 - (void)cleanup:(CDVInvokedUrlCommand*)command
